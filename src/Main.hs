@@ -5,6 +5,7 @@ import Data.Tuple (swap)
 import GHC.Word (Word8)
 import Codec.Picture
 import Codec.Picture.Types
+import Debug.Trace
 
 maxX = 640
 maxY = 480
@@ -13,7 +14,7 @@ cameraPos = Point (maxX `div` 2) (maxY * 3 `div` 4) maxX
 
 main :: IO ()
 main = writePng "test.png" $ generateImage (\x y -> let (r, g, b) = myPlot ! (x+(maxY-y-1)*maxX) in PixelRGB8 r g b) maxX maxY
-  where dumbRender x y = fromList $ draw (Sphere (Point 250 200 400) 200) $ draw Plane emptyPlot
+  where dumbRender x y = fromList $ draw (Sphere (Point 100 300 600) 300) $ draw Plane emptyPlot
         emptyPlot = replicate (maxX*maxY) (0, 0, 0)
         myPlot = dumbRender maxX maxY
 
@@ -30,25 +31,21 @@ class Object a where
 
 
 data Point = Point Int Int Int deriving Show
-data GVector = GVector Int Int Int deriving Show
+data GVector = GVector Float Float Float deriving Show
+intVector x y z = GVector (fromIntegral x) (fromIntegral y) (fromIntegral z)
 data Line = Line Point GVector deriving Show
 
-norm :: GVector -> GVector
-norm (GVector x y z) = GVector (floor $ (fromIntegral x)*k) (floor $ (fromIntegral y)*k) (floor $ (fromIntegral z)*k)
-  where k = 1000.0 / (fromIntegral $ maximum $ fmap abs [x, y, z])
+vecLen :: GVector -> Float
+vecLen (GVector x y z) = sqrt $ x^2 + y^2 + z^2
 
-ll :: GVector -> Float
-ll (GVector x y z) = sqrt $ fromIntegral $ x^2 + y^2 + z^2
-
--- TODO Switch vector to floats and move to separate modules
-normalize :: GVector -> (Float, Float, Float)
-normalize v@(GVector x y z) = let len = ll v in (fromIntegral x / len, fromIntegral y / len, fromIntegral z / len )
+normalize :: GVector -> GVector
+normalize v@(GVector x y z) = let len = vecLen v in GVector (x / len) (y / len) (z / len)
 
 reflect :: GVector -> GVector -> GVector
 reflect (GVector k1x k1y k1z) k2 = GVector rx ry rz
-  where (nx, ny, nz) = normalize k2
-        kDotn = (fromIntegral k1x) * nx + (fromIntegral k1y) * ny + (fromIntegral k1z) * nz
-        refl k n = floor $ (fromIntegral k) - 2*kDotn*n
+  where (GVector nx ny nz) = normalize k2
+        kDotn = k1x * nx + k1y * ny + k1z * nz
+        refl k n = k - 2*kDotn*n
         rx = refl k1x nx
         ry = refl k1y ny
         rz = refl k1z nz
@@ -57,51 +54,45 @@ reflectSphere :: (Int, Int) -> Sphere -> Line
 reflectSphere (sx, sy) (Sphere (Point spx spy spz) rad) = Line hitPoint refVec
   where
     (Point cx cy cz) = cameraPos
-    distance = sqrt $ fromIntegral $ spx^2 + spy^2 + spz^2
+    distance = sqrt $ fromIntegral $ (spx-cx)^2 + (spy-cy)^2 + (spz+cz)^2
     radReduction = (distance + fromIntegral cz) / (fromIntegral cz)
     projRad = floor $ (fromIntegral rad) / radReduction
     (px, py) = coordToProj radReduction spx spy
-    refX = spx + (floor $ (fromIntegral $ sx-px)/radReduction)
-    refY = spy + (floor $ (fromIntegral $ sy-py)/radReduction)
+    refX = spx + (floor $ (fromIntegral $ sx-px)*radReduction)
+    refY = spy + (floor $ (fromIntegral $ sy-py)*radReduction)
     refZ = floor $ sqrt $ fromIntegral $ rad^2 - (spx-refX)^2 - (spy-refY)^2
     maxChange = rad
     hitPoint = Point refX refY refZ
-    fallingVec = GVector (sx - cx) (sy-cy) cz
-    radVec = GVector (refX - spx) (refY - spy) (refZ - spz)
+    fallingVec = intVector (sx - cx) (sy-cy) cz
+    radVec = intVector ( refX - spx) (refY - spy) (refZ - spz)
     refVec = fallingVec `reflect` radVec
 
 data Plane = Plane
-screenPointToPlanePoint :: (Int, Int) -> Maybe Point
+screenPointToPlanePoint :: (Int, Int) -> Maybe MyPixel
 screenPointToPlanePoint (sx, sy) =
-  let (Point cx cy cz) = cameraPos
-      -- plane at y=0 allows to simplify equasion
-      steps = (fromIntegral cy) / (fromIntegral $ cy - sy)
-      z = (floor $ steps * (fromIntegral cz)) - cz
-      x = (floor $ steps * (fromIntegral $ cx - sx)) - cx
-  in
-  if sy >= cy
-  then Nothing -- parallel to plane or diverging
-  else Just $ Point x 0 z
+  -- screen is at z=0
+  let (Point cx cy cz) = cameraPos in
+  lineToPlanePixel (Line (Point (cx) (cy) (-cz)) (intVector (sx-cx) (sy-cy) cz))
 
 data Sphere = Sphere Point Int deriving Show
 
 coordToProj :: Float -> Int -> Int -> (Int, Int)
 coordToProj red x y = (scaleX x, scaleY y)
-  where xRange = (fromIntegral maxX) / red
+  where xRange = (fromIntegral maxX) * red
         difX = (xRange - (fromIntegral maxX)) / 2.0
         scaleX x = floor $ ((fromIntegral x) + difX) / xRange * (fromIntegral maxX)
-        yRange = (fromIntegral maxY) / red
+        yRange = (fromIntegral maxY) *  red
         difY = (yRange - (fromIntegral maxY)) / 2.0
         scaleY y = floor $ ((fromIntegral y) + difY) / yRange * (fromIntegral maxY)
 
-lineToPlanePixel :: Line -> MyPixel
-lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) || isBlack then blackPixel else whitePixel
+lineToPlanePixel :: Line -> Maybe MyPixel
+lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else if isBlack then Just blackPixel else Just whitePixel
   where
       -- plane at y=0 allows to simplify equasion
-      steps = (fromIntegral y) / (fromIntegral $ y - dy)
-      rz = z + (floor $ steps * (fromIntegral dz))
-      rx = x + (floor $ steps * (fromIntegral dx))
-      whitePixel = (0, 100, 100)
+      steps = (fromIntegral y) / dy
+      rz = z + (floor $ steps * dz)
+      rx = x + (floor $ steps * dx)
+      whitePixel = (200, 200, 200)
       blackPixel = (0, 0, 0)
       isBlack = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
       mx = rx `mod` (squareSize * 2)
@@ -110,7 +101,7 @@ lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) || isBlack
 
 
 instance Object Sphere where
-  draw (Sphere (Point spx spy spz) rad) plot =
+  draw sphere@(Sphere (Point spx spy spz) rad) plot =
     snd . markSphere <$> enumCoord plot
     where
       markSphere :: ((Int, Int), MyPixel) -> ((Int, Int), MyPixel)
@@ -118,16 +109,18 @@ instance Object Sphere where
         where newPixel = lineToPixel screenPoint
               hitSphere (sx, sy) = inCircle sx sy
               (Point cx cy cz) = cameraPos
-              distance = sqrt $ fromIntegral $ spx^2 + spy^2 + spz^2
+              distance = sqrt $ fromIntegral $ (spx-cx)^2 + (spy-cy)^2 + (spz+cz)^2
               radReduction = (distance + fromIntegral cz) / (fromIntegral cz)
               projRad = floor $ (fromIntegral rad) / radReduction
               (px, py) = coordToProj radReduction spx spy
               inCircle x y = (x-px)^2 + (y-py)^2 <= projRad^2
               refPixel coords sp = (200, refG, refB)
                 where line = reflectSphere coords sp
-                      (_, refG, refB) = lineToPlanePixel line
+                      reflectedPixel = lineToPlanePixel line
+                      (refB, refG) = case reflectedPixel of Nothing -> (0, 0)
+                                                            Just (r, g, b) -> (g `div` 4 * 3, b `div` 4 * 3 )
               lineToPixel :: (Int, Int) -> MyPixel
-              lineToPixel screenPoint = if hitSphere screenPoint then refPixel screenPoint (Sphere (Point spx spy spz) rad) else pixel
+              lineToPixel screenPoint = if hitSphere screenPoint then refPixel screenPoint sphere else pixel
 
 instance Object Plane where
   draw plane plot =
@@ -136,13 +129,7 @@ instance Object Plane where
       markPlane :: ((Int, Int), MyPixel) -> ((Int, Int), MyPixel)
       markPlane (screenPoint, pixel) = (screenPoint, newPixel)
         where newPixel = lineToPixel screenPoint Plane
-              whitePixel = (200, 200, 200)
-              blackPixel = (100, 100, 100)
-              isBlack (Point x _ z) = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
-                where mx = x `mod` (squareSize * 2)
-                      mz = z `mod` (squareSize * 2)
-                      squareSize = maxX `div` 5
               lineToPixel :: (Int, Int) -> Plane -> MyPixel
               lineToPixel screenPoint _ = case screenPointToPlanePoint screenPoint of Nothing -> pixel
-                                                                                      (Just plx) -> if isBlack plx then blackPixel else whitePixel
+                                                                                      (Just plx) -> plx
 
