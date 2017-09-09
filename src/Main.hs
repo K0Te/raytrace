@@ -13,7 +13,7 @@ cameraPos = Point (maxX `div` 2) (maxY * 3 `div` 4) maxX
 
 main :: IO ()
 main = writePng "test.png" $ generateImage (\x y -> let (r, g, b) = myPlot ! (x+(maxY-y-1)*maxX) in PixelRGB8 r g b) maxX maxY
-  where dumbRender x y = fromList $ draw (Sphere (Point 250 250 400) 200) $ draw Plane emptyPlot
+  where dumbRender x y = fromList $ draw (Sphere (Point 250 200 400) 200) $ draw Plane emptyPlot
         emptyPlot = replicate (maxX*maxY) (0, 0, 0)
         myPlot = dumbRender maxX maxY
 
@@ -37,11 +37,21 @@ norm :: GVector -> GVector
 norm (GVector x y z) = GVector (floor $ (fromIntegral x)*k) (floor $ (fromIntegral y)*k) (floor $ (fromIntegral z)*k)
   where k = 1000.0 / (fromIntegral $ maximum $ fmap abs [x, y, z])
 
-around :: GVector -> GVector -> GVector
--- wrong, definitely not sum :) 2nd vector should be used as ref. coef.
-around k1 k2 = GVector (k1x + k2x) (k1y+k2y) (k1z+k2z)
-  where (GVector k1x k1y k1z) = norm k1
-        (GVector k2x k2y k2z) = norm k2
+ll :: GVector -> Float
+ll (GVector x y z) = sqrt $ fromIntegral $ x^2 + y^2 + z^2
+
+-- TODO Switch vector to floats and move to separate modules
+normalize :: GVector -> (Float, Float, Float)
+normalize v@(GVector x y z) = let len = ll v in (fromIntegral x / len, fromIntegral y / len, fromIntegral z / len )
+
+reflect :: GVector -> GVector -> GVector
+reflect (GVector k1x k1y k1z) k2 = GVector rx ry rz
+  where (nx, ny, nz) = normalize k2
+        kDotn = (fromIntegral k1x) * nx + (fromIntegral k1y) * ny + (fromIntegral k1z) * nz
+        refl k n = floor $ (fromIntegral k) - 2*kDotn*n
+        rx = refl k1x nx
+        ry = refl k1y ny
+        rz = refl k1z nz
 
 reflectSphere :: (Int, Int) -> Sphere -> Line
 reflectSphere (sx, sy) (Sphere (Point spx spy spz) rad) = Line hitPoint refVec
@@ -58,7 +68,7 @@ reflectSphere (sx, sy) (Sphere (Point spx spy spz) rad) = Line hitPoint refVec
     hitPoint = Point refX refY refZ
     fallingVec = GVector (sx - cx) (sy-cy) cz
     radVec = GVector (refX - spx) (refY - spy) (refZ - spz)
-    refVec = fallingVec `around` radVec
+    refVec = fallingVec `reflect` radVec
 
 data Plane = Plane
 screenPointToPlanePoint :: (Int, Int) -> Maybe Point
@@ -91,7 +101,7 @@ lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) || isBlack
       steps = (fromIntegral y) / (fromIntegral $ y - dy)
       rz = z + (floor $ steps * (fromIntegral dz))
       rx = x + (floor $ steps * (fromIntegral dx))
-      whitePixel = (0, 50, 50)
+      whitePixel = (0, 100, 100)
       blackPixel = (0, 0, 0)
       isBlack = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
       mx = rx `mod` (squareSize * 2)
