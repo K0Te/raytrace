@@ -1,2 +1,2 @@
 Raytrace in Haskell. Just for fun.
-![alt text](https://github.com/K0Te/raytrace/test.png "test.png")
+![alt text](https://github.com/K0Te/raytrace/blob/master/test.png "test.png")
