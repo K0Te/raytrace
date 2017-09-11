@@ -2,19 +2,27 @@ module Main where
 
 import Data.Vector (Vector, (!), fromList)
 import Data.Tuple (swap)
+import Data.List (minimumBy)
 import GHC.Word (Word8)
 import Codec.Picture
 import Codec.Picture.Types
 import Debug.Trace
 
+-- TODO
+-- Make all zises relative
+
 maxX = 640
 maxY = 480
+refCoef = 0.5
 -- camera is pointed parallel to z
-cameraPos = Point (maxX `div` 2) (maxY * 3 `div` 4) maxX
+cameraPos = Point (maxX `div` 2) (maxY `div` 2) maxX
 
 main :: IO ()
 main = writePng "test.png" $ generateImage (\x y -> let (r, g, b) = myPlot ! (x+(maxY-y-1)*maxX) in PixelRGB8 r g b) maxX maxY
-  where dumbRender x y = fromList $ draw (Sphere (Point 100 300 600) 300) $ draw Plane emptyPlot
+  where scene = [Sphere (Point 300 200 400) 300,
+                 Plane]
+        -- dumbRender x y = fromList $ foldr draw emptyPlot scene
+        dumbRender x y = fromList $ recursiveRender scene
         emptyPlot = replicate (maxX*maxY) (0, 0, 0)
         myPlot = dumbRender maxX maxY
 
@@ -26,14 +34,12 @@ enumCoord xs = let coords = map toCoord (fst <$> zip [0..] xs)
 
 type MyPixel = (Word8, Word8, Word8)
 type MyPlot =  [MyPixel]
-class Object a where
-  draw :: a -> MyPlot -> MyPlot
-
-
 data Point = Point Int Int Int deriving Show
 data GVector = GVector Float Float Float deriving Show
 intVector x y z = GVector (fromIntegral x) (fromIntegral y) (fromIntegral z)
 data Line = Line Point GVector deriving Show
+
+data VisibleObject = Plane | Sphere Point Int deriving Show
 
 vecLen :: GVector -> Float
 vecLen (GVector x y z) = sqrt $ x^2 + y^2 + z^2
@@ -50,43 +56,8 @@ reflect (GVector k1x k1y k1z) k2 = GVector rx ry rz
         ry = refl k1y ny
         rz = refl k1z nz
 
-reflectSphere :: (Int, Int) -> Sphere -> Line
-reflectSphere (sx, sy) (Sphere (Point spx spy spz) rad) = Line hitPoint refVec
-  where
-    (Point cx cy cz) = cameraPos
-    distance = sqrt $ fromIntegral $ (spx-cx)^2 + (spy-cy)^2 + (spz+cz)^2
-    radReduction = (distance + fromIntegral cz) / (fromIntegral cz)
-    projRad = floor $ (fromIntegral rad) / radReduction
-    (px, py) = coordToProj radReduction spx spy
-    refX = spx + (floor $ (fromIntegral $ sx-px)*radReduction)
-    refY = spy + (floor $ (fromIntegral $ sy-py)*radReduction)
-    refZ = floor $ sqrt $ fromIntegral $ rad^2 - (spx-refX)^2 - (spy-refY)^2
-    maxChange = rad
-    hitPoint = Point refX refY refZ
-    fallingVec = intVector (sx - cx) (sy-cy) cz
-    radVec = intVector ( refX - spx) (refY - spy) (refZ - spz)
-    refVec = fallingVec `reflect` radVec
-
-data Plane = Plane
-screenPointToPlanePoint :: (Int, Int) -> Maybe MyPixel
-screenPointToPlanePoint (sx, sy) =
-  -- screen is at z=0
-  let (Point cx cy cz) = cameraPos in
-  lineToPlanePixel (Line (Point (cx) (cy) (-cz)) (intVector (sx-cx) (sy-cy) cz))
-
-data Sphere = Sphere Point Int deriving Show
-
-coordToProj :: Float -> Int -> Int -> (Int, Int)
-coordToProj red x y = (scaleX x, scaleY y)
-  where xRange = (fromIntegral maxX) * red
-        difX = (xRange - (fromIntegral maxX)) / 2.0
-        scaleX x = floor $ ((fromIntegral x) + difX) / xRange * (fromIntegral maxX)
-        yRange = (fromIntegral maxY) *  red
-        difY = (yRange - (fromIntegral maxY)) / 2.0
-        scaleY y = floor $ ((fromIntegral y) + difY) / yRange * (fromIntegral maxY)
-
-lineToPlanePixel :: Line -> Maybe MyPixel
-lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else if isBlack then Just blackPixel else Just whitePixel
+lineToPlanePixel :: Line -> Maybe (MyPixel, Int, Int)
+lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else if isBlack then Just (blackPixel, rx, rz) else Just (whitePixel, rx, rz)
   where
       -- plane at y=0 allows to simplify equasion
       steps = (fromIntegral y) / dy
@@ -97,39 +68,76 @@ lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothi
       isBlack = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
       mx = rx `mod` (squareSize * 2)
       mz = rz `mod` (squareSize * 2)
+      -- first row starts with 5 squares
       squareSize = maxX `div` 5
 
+pixSum :: Float -> MyPixel -> MyPixel -> MyPixel
+pixSum k (r, g, b) (r2, g2, b2) = ((r + kx r2), (g + kx g2), (b + kx b2))
+  where kx color = floor $ k * fromIntegral color
 
-instance Object Sphere where
-  draw sphere@(Sphere (Point spx spy spz) rad) plot =
-    snd . markSphere <$> enumCoord plot
-    where
-      markSphere :: ((Int, Int), MyPixel) -> ((Int, Int), MyPixel)
-      markSphere (screenPoint, pixel) = (screenPoint, newPixel)
-        where newPixel = lineToPixel screenPoint
-              hitSphere (sx, sy) = inCircle sx sy
-              (Point cx cy cz) = cameraPos
-              distance = sqrt $ fromIntegral $ (spx-cx)^2 + (spy-cy)^2 + (spz+cz)^2
-              radReduction = (distance + fromIntegral cz) / (fromIntegral cz)
-              projRad = floor $ (fromIntegral rad) / radReduction
-              (px, py) = coordToProj radReduction spx spy
-              inCircle x y = (x-px)^2 + (y-py)^2 <= projRad^2
-              refPixel coords sp = (200, refG, refB)
-                where line = reflectSphere coords sp
-                      reflectedPixel = lineToPlanePixel line
-                      (refB, refG) = case reflectedPixel of Nothing -> (0, 0)
-                                                            Just (r, g, b) -> (g `div` 4 * 3, b `div` 4 * 3 )
-              lineToPixel :: (Int, Int) -> MyPixel
-              lineToPixel screenPoint = if hitSphere screenPoint then refPixel screenPoint sphere else pixel
+noPoint = Point 9999 9999 9999
 
-instance Object Plane where
-  draw plane plot =
-    snd . markPlane <$> enumCoord plot
-    where
-      markPlane :: ((Int, Int), MyPixel) -> ((Int, Int), MyPixel)
-      markPlane (screenPoint, pixel) = (screenPoint, newPixel)
-        where newPixel = lineToPixel screenPoint Plane
-              lineToPixel :: (Int, Int) -> Plane -> MyPixel
-              lineToPixel screenPoint _ = case screenPointToPlanePoint screenPoint of Nothing -> pixel
-                                                                                      (Just plx) -> plx
+type Ray = (Line, Float, MyPixel)
+type Rays = [Ray]
+reflectR :: Ray -> VisibleObject -> Ray
+reflectR (line@(Line point vv@(GVector x y z)), coef, pixel@(r, g, b)) Plane =
+      case lineToPlanePixel line of Nothing -> (Line noPoint vv, 0.0, pixel)
+                                    Just (pixel2, rx, rz) -> (Line (Point rx 0 rz) (GVector x y (-z)), coef * refCoef, pixSum coef pixel pixel2)
 
+reflectR (line@(Line point vec@(GVector x y z)), coef, pixel@(r, g, b)) sphere@(Sphere sp@(Point spx spy spz) rad) = (Line hitPoint refVector, resCoef, pixSum coef pixel pixel2)
+  where
+    hitPointM = hit sphere line
+    refVector = case hitPointM of Nothing -> vec
+                                  Just hitP -> reflect vec (vecFromPoint sp hitP)
+    resCoef = case hitPointM of Nothing -> 0.0
+                                Just hitP -> coef * refCoef
+    pixel2 = case hitPointM of Nothing -> (0, 0, 0)
+                               Just hitP -> (200, 20, 20)
+    hitPoint = case hitPointM of Nothing -> noPoint -- TODO use maybe
+                                 Just hitP -> hitP
+
+hit :: VisibleObject -> Line -> Maybe Point
+hit sphere@(Sphere sp@(Point spx spy spz) rad) line@(Line point@(Point px py pz) vec@(GVector x y z)) = res
+  where
+    l@(GVector ddx ddy ddz) = normalize vec
+    oc = vecFromPoint sp point :: GVector
+    loc = l `dotP` oc :: Float
+    dt = loc ** 2 - (oc `dotP` oc) + ((fromIntegral rad) ** 2)
+    res = if dt <= 0 then Nothing else Just $ Point (px + floor dx) (py + floor dy) (pz + floor dz)
+      where dd = min ((sqrt dt) - loc) ((-(sqrt dt)) - loc)
+            dx = dd * ddx
+            dy = dd * ddy
+            dz = dd * ddz
+
+dotP :: GVector -> GVector -> Float
+dotP (GVector k1x k1y k1z) k2 = k1x * nx + k1y * ny + k1z * nz
+  where (GVector nx ny nz) = k2
+
+vecFromPoint :: Point -> Point -> GVector
+vecFromPoint (Point x1 y1 z1) (Point x2 y2 z2) = GVector (fromIntegral $ x2 - x1) (fromIntegral $ y2 - y1) (fromIntegral $ z2 - z1)
+
+distance :: Point -> Point -> Float
+distance (Point x1 y1 z1) (Point x2 y2 z2) = sqrt $ fromIntegral $ (x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2
+
+
+recursiveRender :: [VisibleObject] -> [MyPixel]
+recursiveRender scene = render <$> loop scene inialRays
+  where
+  -- create initial rays
+  -- for each one -> check if K is small enough -> early return
+  -- hit each object
+  -- use nearest (!) hit point (from ray start)
+  -- recursion
+  emptyPlot = replicate (maxX*maxY) (10, 10, 10)
+  (Point cx cy cz) = cameraPos
+  inialRay = \((sx,sy), pixel) -> (Line (Point cx cy (-cz)) (GVector (fromIntegral $ sx-cx) (fromIntegral $ sy-cy) (fromIntegral cz)), 1.0, pixel)
+  inialRays = inialRay <$> enumCoord emptyPlot
+  loop :: [VisibleObject] -> Rays -> Rays
+  loop scene rays = rendRay <$> rays
+    where rendRay :: (Line, Float, MyPixel) -> (Line, Float, MyPixel)
+          rendRay ray@(line@(Line point vec), coef, pixel) = if coef < 0.01 then ray else refRay
+            where refRay = rendRay $ minimumBy calcDistance $ (reflectR ray) <$> scene
+                  calcDistance :: Ray -> Ray -> Ordering
+                  calcDistance (Line p1 v1, _, _) (Line p2 v2, _, _) = compare (distance point p1) (distance point p2)
+  render :: (Line, Float, MyPixel) -> MyPixel
+  render (_, _, pixel) = pixel
