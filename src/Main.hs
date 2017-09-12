@@ -13,13 +13,14 @@ import Debug.Trace
 
 maxX = 640
 maxY = 480
-refCoef = 0.5
+refCoef = 0.3
 -- camera is pointed parallel to z
 cameraPos = Point (maxX `div` 2) (maxY `div` 2) maxX
 
 main :: IO ()
 main = writePng "test.png" $ generateImage (\x y -> let (r, g, b) = myPlot ! (x+(maxY-y-1)*maxX) in PixelRGB8 r g b) maxX maxY
-  where scene = [Sphere (Point 300 200 400) 300,
+  where scene = [Sphere (Point (maxX `div` 5) (maxY `div` 3) (maxY `div` 2)) (maxY `div` 3),
+                 Sphere (Point maxX (maxY `div` 3) (maxY*2)) (maxY `div` 2),
                  Plane]
         -- dumbRender x y = fromList $ foldr draw emptyPlot scene
         dumbRender x y = fromList $ recursiveRender scene
@@ -60,7 +61,7 @@ lineToPlanePixel :: Line -> Maybe (MyPixel, Int, Int)
 lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else if isBlack then Just (blackPixel, rx, rz) else Just (whitePixel, rx, rz)
   where
       -- plane at y=0 allows to simplify equasion
-      steps = (fromIntegral y) / dy
+      steps = (fromIntegral y) / (-dy)
       rz = z + (floor $ steps * dz)
       rx = x + (floor $ steps * dx)
       whitePixel = (200, 200, 200)
@@ -72,8 +73,8 @@ lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothi
       squareSize = maxX `div` 5
 
 pixSum :: Float -> MyPixel -> MyPixel -> MyPixel
-pixSum k (r, g, b) (r2, g2, b2) = ((r + kx r2), (g + kx g2), (b + kx b2))
-  where kx color = floor $ k * fromIntegral color
+pixSum k (r, g, b) (r2, g2, b2) = ((kx r r2), (kx g g2), (kx b b2))
+  where kx c1 c2 = floor $ (fromIntegral c1) * (1.0 - k) + k * fromIntegral c2
 
 noPoint = Point 9999 9999 9999
 
@@ -82,7 +83,7 @@ type Rays = [Ray]
 reflectR :: Ray -> VisibleObject -> Ray
 reflectR (line@(Line point vv@(GVector x y z)), coef, pixel@(r, g, b)) Plane =
       case lineToPlanePixel line of Nothing -> (Line noPoint vv, 0.0, pixel)
-                                    Just (pixel2, rx, rz) -> (Line (Point rx 0 rz) (GVector x y (-z)), coef * refCoef, pixSum coef pixel pixel2)
+                                    Just (pixel2, rx, rz) -> (Line (Point rx 0 rz) (GVector x (-y) z), coef * refCoef, pixSum coef pixel pixel2)
 
 reflectR (line@(Line point vec@(GVector x y z)), coef, pixel@(r, g, b)) sphere@(Sphere sp@(Point spx spy spz) rad) = (Line hitPoint refVector, resCoef, pixSum coef pixel pixel2)
   where
@@ -103,7 +104,7 @@ hit sphere@(Sphere sp@(Point spx spy spz) rad) line@(Line point@(Point px py pz)
     oc = vecFromPoint sp point :: GVector
     loc = l `dotP` oc :: Float
     dt = loc ** 2 - (oc `dotP` oc) + ((fromIntegral rad) ** 2)
-    res = if dt <= 0 then Nothing else Just $ Point (px + floor dx) (py + floor dy) (pz + floor dz)
+    res = if dt <= 0 || dd <= 0 then Nothing else Just $ Point (px + floor dx) (py + floor dy) (pz + floor dz)
       where dd = min ((sqrt dt) - loc) ((-(sqrt dt)) - loc)
             dx = dd * ddx
             dy = dd * ddy
