@@ -21,3 +21,4 @@ executable raytrace
   build-depends:       base >= 4.7 && < 5
                        , vector
                        , JuicyPixels >= 3.2 && < 4
+                       , parallel >= 3.2 && < 4
