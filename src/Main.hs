@@ -17,10 +17,10 @@ refCoef = 0.3
 cameraPos = intPoint (maxX `div` 2) (maxY `div` 2) (-maxX)
 
 main :: IO ()
-main = writePng "test.png" $ generateImage (\x y -> let MyPixel r g b = myPlot ! (x+(maxY-y-1)*maxX) in PixelRGB8 (floor r) (floor g) (floor b)) maxX maxY
-  where scene = [Sphere (intPoint (maxX `div` 5) (maxY `div` 3) (maxY `div` 2)) (fromIntegral $ maxY `div` 3),
-                 Sphere (intPoint maxX (maxY `div` 3) (maxY*2)) (fromIntegral $ maxY `div` 2),
-                 Plane]
+main = writePng "test.png" $ generateImage (\x y -> let MyPixel r g b = myPlot ! (x+(maxY-y-1)*maxX) in
+                                            PixelRGB8 (floor r) (floor g) (floor b)) maxX maxY
+  where scene = [Sphere (intPoint x y x) (fromIntegral r) | x <- (*(2*r)) <$> [0..10], y <- [r]] ++ [Plane]
+        r = min (maxX `div` 5) (maxY `div` 5)
         myPlot = fromList $ recursiveRender scene
 
 enumCoord :: [a] -> [((Int, Int), a)]
@@ -50,29 +50,19 @@ reflect (GVector k1x k1y k1z) k2 = GVector rx ry rz
         ry = refl k1y ny
         rz = refl k1z nz
 
--- TODO rewrite this and "hit" as one function
-lineToPlanePixel :: Line -> Maybe (MyPixel, Double, Double)
-lineToPlanePixel (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else if isBlack then Just (blackPixel, rx, rz) else Just (whitePixel, rx, rz)
-  where
-      -- plane at y=0 allows to simplify equasion
-      steps =  y / (-dy)
-      rz = z + steps * dz
-      rx = x + steps * dx
-      whitePixel = MyPixel 200 200 200
-      blackPixel = MyPixel 0 0 0
-      isBlack = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
-      mx = rx `mod'` (squareSize * 2)
-      mz = rz `mod'` (squareSize * 2)
-      -- first row starts with 5 squares
-      squareSize = fromIntegral $ maxX `div` 5
-
 pixSum :: Double -> MyPixel -> MyPixel -> MyPixel
 pixSum k (MyPixel r g b) (MyPixel r2 g2 b2) = (MyPixel (kx r r2) (kx g g2) (kx b b2))
   where kx c1 c2 = c1 * (1.0 - k) + k * c2
 
 reflectR :: Ray -> VisibleObject -> Maybe Ray
-reflectR (line@(Line point vv@(GVector x y z)), coef, pixel) Plane = refPixeltoRay <$> lineToPlanePixel line
-  where refPixeltoRay (pixel2, rx, rz) = (Line (Point rx 0 rz) (GVector x (-y) z), coef * refCoef, pixSum coef pixel pixel2)
+reflectR (line@(Line point vv@(GVector x y z)), coef, pixel) Plane = refPixeltoRay <$> hit Plane line
+  where refPixeltoRay (Point rx ry rz) = (Line (Point rx 0 rz) (GVector x (-y) z), coef * refCoef, pixSum coef pixel pixel2)
+          where pixel2 = if isBlack then MyPixel 0 0 0 else MyPixel 200 200 200
+                isBlack = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
+                mx = rx `mod'` (squareSize * 2)
+                mz = rz `mod'` (squareSize * 2)
+                -- first row starts with 5 squares
+                squareSize = fromIntegral $ maxX `div` 5
 
 reflectR (line@(Line point vec@(GVector x y z)), coef, pixel) sphere@(Sphere sp@(Point spx spy spz) rad) =
   refPixeltoRay <$> hit sphere line
@@ -92,6 +82,10 @@ hit (Sphere sp@(Point spx spy spz) rad) (Line point@(Point px py pz) vec@(GVecto
             dx = dd * ddx
             dy = dd * ddy
             dz = dd * ddz
+hit Plane (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else Just $ Point rx 0 rz
+  where steps =  y / (-dy)
+        rz = z + steps * dz
+        rx = x + steps * dx
 
 dotP :: GVector -> GVector -> Double
 dotP (GVector k1x k1y k1z) k2 = k1x * nx + k1y * ny + k1z * nz
@@ -102,7 +96,6 @@ vecFromPoint (Point x1 y1 z1) (Point x2 y2 z2) = GVector (x2 - x1) (y2 - y1) (z2
 
 distance :: Point -> Point -> Double
 distance (Point x1 y1 z1) (Point x2 y2 z2) = sqrt $ (x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2
-
 
 recursiveRender :: [VisibleObject] -> [MyPixel]
 recursiveRender scene = (render <$> rendRay <$> inialRays) `using` parListChunk (maxX `div` 2) rseq
