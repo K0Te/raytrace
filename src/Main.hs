@@ -1,14 +1,14 @@
 module Main where
 
 import Control.Parallel.Strategies (parListChunk, using, rseq)
-import Data.Vector (Vector, (!), fromList)
+import Data.Vector ((!), fromList)
 import Data.Tuple (swap)
 import Data.List (minimumBy)
 import Data.Maybe (catMaybes)
 import Data.Fixed (mod')
-import GHC.Word (Word8)
+import GHC.Word ()
 import Codec.Picture
-import Codec.Picture.Types
+import Codec.Picture.Types ()
 
 maxX = 1920 :: Int
 maxY = 1080 :: Int
@@ -24,7 +24,7 @@ main = writePng "test.png" $ generateImage (\x y -> let MyPixel r g b = myPlot !
         myPlot = fromList $ recursiveRender scene
 
 enumCoord :: [a] -> [((Int, Int), a)]
-enumCoord xs = (swap.(toCoord <$>).swap) <$> (zip [0..] xs)
+enumCoord xs = (swap.(toCoord <$>).swap) <$> zip [0..] xs
                where toCoord num = swap $ num `divMod` maxX
 
 data MyPixel = MyPixel !Double !Double !Double
@@ -38,7 +38,7 @@ type Ray = (Line, Double, MyPixel)
 type Rays = [Ray]
 
 normalize :: GVector -> GVector
-normalize v@(GVector x y z) = GVector (x / len) (y / len) (z / len)
+normalize (GVector x y z) = GVector (x / len) (y / len) (z / len)
   where len = sqrt $ x^2 + y^2 + z^2
 
 reflect :: GVector -> GVector -> GVector
@@ -51,12 +51,12 @@ reflect (GVector k1x k1y k1z) k2 = GVector rx ry rz
         rz = refl k1z nz
 
 pixSum :: Double -> MyPixel -> MyPixel -> MyPixel
-pixSum k (MyPixel r g b) (MyPixel r2 g2 b2) = (MyPixel (kx r r2) (kx g g2) (kx b b2))
+pixSum k (MyPixel r g b) (MyPixel r2 g2 b2) = MyPixel (kx r r2) (kx g g2) (kx b b2)
   where kx c1 c2 = c1 * (1.0 - k) + k * c2
 
 reflectR :: Ray -> VisibleObject -> Maybe Ray
-reflectR (line@(Line point vv@(GVector x y z)), coef, pixel) Plane = refPixeltoRay <$> hit Plane line
-  where refPixeltoRay (Point rx ry rz) = (Line (Point rx 0 rz) (GVector x (-y) z), coef * refCoef, pixSum coef pixel pixel2)
+reflectR (line@(Line _ (GVector x y z)), coef, pixel) Plane = refPixeltoRay <$> hit Plane line
+  where refPixeltoRay (Point rx _ rz) = (Line (Point rx 0 rz) (GVector x (-y) z), coef * refCoef, pixSum coef pixel pixel2)
           where pixel2 = if isBlack then MyPixel 0 0 0 else MyPixel 200 200 200
                 isBlack = mx < squareSize && mz < squareSize || mx >= squareSize && mz >= squareSize
                 mx = rx `mod'` (squareSize * 2)
@@ -64,25 +64,25 @@ reflectR (line@(Line point vv@(GVector x y z)), coef, pixel) Plane = refPixeltoR
                 -- first row starts with 5 squares
                 squareSize = fromIntegral $ maxX `div` 5
 
-reflectR (line@(Line point vec@(GVector x y z)), coef, pixel) sphere@(Sphere sp@(Point spx spy spz) rad) =
+reflectR (line@(Line _ vec), coef, pixel) sphere@(Sphere sp _) =
   refPixeltoRay <$> hit sphere line
   where
     refPixeltoRay hitP = (Line hitP refVector, coef * refCoef, pixSum coef pixel (MyPixel 200 20 20))
       where refVector = reflect vec (vecFromPoint sp hitP)
 
 hit :: VisibleObject -> Line -> Maybe Point
-hit (Sphere sp@(Point spx spy spz) rad) (Line point@(Point px py pz) vec@(GVector x y z)) = res
+hit (Sphere sp rad) (Line point@(Point px py pz) vec) = res
   where
     l@(GVector ddx ddy ddz) = normalize vec
     oc = vecFromPoint sp point :: GVector
     loc = l `dotP` oc :: Double
     dt = loc ** 2 - (oc `dotP` oc) + rad ** 2
     res = if dt <= 0 || dd <= 0 then Nothing else Just $ Point (px + dx) (py + dy) (pz + dz)
-      where dd = min ((sqrt dt) - loc) ((-(sqrt dt)) - loc)
+      where dd = min (sqrt dt - loc) ((-(sqrt dt)) - loc)
             dx = dd * ddx
             dy = dd * ddy
             dz = dd * ddz
-hit Plane (Line (Point x y z) (GVector dx dy dz)) = if (dy>=0) then Nothing else Just $ Point rx 0 rz
+hit Plane (Line (Point x y z) (GVector dx dy dz)) = if dy>=0 then Nothing else Just $ Point rx 0 rz
   where steps =  y / (-dy)
         rz = z + steps * dz
         rx = x + steps * dx
@@ -98,7 +98,7 @@ distance :: Point -> Point -> Double
 distance (Point x1 y1 z1) (Point x2 y2 z2) = sqrt $ (x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2
 
 recursiveRender :: [VisibleObject] -> [MyPixel]
-recursiveRender scene = (render <$> rendRay <$> inialRays) `using` parListChunk (maxX `div` 2) rseq
+recursiveRender scene = (render . rendRay <$> inialRays) `using` parListChunk (maxX `div` 2) rseq
   where
   -- 1. create initial rays
   -- 2. for each one -> check if there possible color change is small enough -> stop
@@ -106,12 +106,12 @@ recursiveRender scene = (render <$> rendRay <$> inialRays) `using` parListChunk 
   -- 4. goto (2)
   emptyPlot = replicate (maxX*maxY) (MyPixel 10 10 10)
   (Point cx cy cz) = cameraPos
-  inialRay = \((sx,sy), pixel) -> (Line (Point cx cy cz) (GVector ((fromIntegral sx)-cx) ((fromIntegral sy)-cy) (-cz)), 1.0, pixel)
+  inialRay ((sx,sy), pixel) = (Line (Point cx cy cz) (GVector (fromIntegral sx - cx) (fromIntegral sy - cy) (-cz)), 1.0, pixel)
   inialRays = inialRay <$> enumCoord emptyPlot
   rendRay :: (Line, Double, MyPixel) -> (Line, Double, MyPixel)
-  rendRay ray@((Line point vec), coef, pixel) = if coef < 0.01 || null refRays then ray else rendRay $ minimumBy calcDistance $ refRays
-    where refRays = catMaybes $ (reflectR ray) <$> scene
+  rendRay ray@(Line point _, coef, _) = if coef < 0.01 || null refRays then ray else rendRay $ minimumBy calcDistance refRays
+    where refRays = catMaybes $ reflectR ray <$> scene
           calcDistance :: Ray -> Ray -> Ordering
-          calcDistance (Line p1 v1, _, _) (Line p2 v2, _, _) = compare (distance point p1) (distance point p2)
+          calcDistance (Line p1 _, _, _) (Line p2 _, _, _) = compare (distance point p1) (distance point p2)
   render :: (Line, Double, MyPixel) -> MyPixel
   render (_, _, pixel) = pixel
